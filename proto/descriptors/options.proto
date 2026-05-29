@@ -547,4 +547,5 @@ message Options {
   TileOptions tile_options = 64;                                   // additional /tile specific options
   repeated Levels exclude_levels = 65;                             // Levels to exclude within the exclude_polygon at the same index
   uint32 expansion_max_distance = 66;                              // Maximum path distance in meters for expansion. 0 = disabled.
+  bool isochrone_split = 67;                                       // Color the isochrone grid per input location (network Voronoi by cost). Requires exactly 2 locations and geotiff output: band 1 = seconds from location 0, band 2 = seconds from location 1.
 }

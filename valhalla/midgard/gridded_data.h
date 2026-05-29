@@ -64,6 +64,15 @@ public:
     }
   }
 
+  // Set a single band of the value at a tile Id if less than the current value. Used to track a
+  // per-source metric (e.g. cost from each origin) on a shared, aligned grid.
+  inline void SetIfLessThan(const int tile_id, const size_t band, const float value) {
+    if (tile_id >= 0 && static_cast<size_t>(tile_id) < data_.size() && band < dimensions_t) {
+      auto& current_value = data_[tile_id][band];
+      current_value = std::min(value, current_value);
+    }
+  }
+
   float DataAt(size_t tileid, size_t metricid) const {
     return data_[tileid][metricid];
   }

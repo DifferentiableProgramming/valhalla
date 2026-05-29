@@ -83,6 +83,9 @@ protected:
   float shape_interval_; // Interval along shape to mark time
   float max_seconds_;
   float max_meters_;
+  // when true each input location is tracked separately and colored into its own grid band
+  // (band = label path_id) so the grid holds the cost from each source on one aligned grid
+  bool split_ = false;
   std::shared_ptr<midgard::GriddedData<2>> isotile_;
   expansion_callback_t inner_expansion_callback_;
 
@@ -120,7 +123,8 @@ protected:
   void UpdateIsoTileAlongSegment(const midgard::PointLL& from,
                                  const midgard::PointLL& to,
                                  float seconds,
-                                 float meters);
+                                 float meters,
+                                 uint8_t band);
 };
 
 } // namespace thor

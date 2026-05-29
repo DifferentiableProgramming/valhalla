@@ -1247,6 +1247,10 @@ void from_json(rapidjson::Document& doc, Options::Action action, Api& api) {
   // if specified, get the show_locations boolean in there
   options.set_show_locations(rapidjson::get<bool>(doc, "/show_locations", options.show_locations()));
 
+  // if specified, color the isochrone grid per input location (cost Voronoi split)
+  options.set_isochrone_split(
+      rapidjson::get<bool>(doc, "/isochrone_split", options.isochrone_split()));
+
   // if specified, get the shape_match in there
   auto shape_match_str = rapidjson::get_optional<std::string>(doc, "/shape_match");
   ShapeMatch shape_match;

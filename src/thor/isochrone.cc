@@ -162,9 +162,17 @@ void Isochrone::ConstructIsoTile(const bool multimodal,
   }
 
   // initialize the time at these locations
+  uint8_t loc_idx = 0;
   for (const auto& location : api.options().locations()) {
     auto tile_id = isotile_->TileId({location.ll().lng(), location.ll().lat()});
-    isotile_->SetIfLessThan(tile_id, {has_time ? 0.0f : max_minutes, has_distance ? 0.0f : max_km});
+    if (split_) {
+      // seed only this location's own band so each source starts at zero in its own layer
+      isotile_->SetIfLessThan(tile_id, static_cast<size_t>(loc_idx), 0.0f);
+    } else {
+      isotile_->SetIfLessThan(tile_id,
+                              {has_time ? 0.0f : max_minutes, has_distance ? 0.0f : max_km});
+    }
+    ++loc_idx;
   }
 }
 
@@ -174,6 +182,10 @@ std::shared_ptr<const GriddedData<2>> Isochrone::Expand(const ExpansionType& exp
                                                         GraphReader& reader,
                                                         const sif::mode_costing_t& mode_costing,
                                                         const travel_mode_t mode) {
+  // In split mode each input location is expanded as its own path so we can color the grid by
+  // which source reached a cell with lower cost (network Voronoi). multimodal isn't supported here.
+  split_ = api.options().isochrone_split() && expansion_type != ExpansionType::multimodal;
+  multipath_ = split_;
   // Initialize and create the isotile
   ConstructIsoTile(expansion_type == ExpansionType::multimodal, api, mode);
   // Compute the expansion
@@ -184,25 +196,35 @@ std::shared_ptr<const GriddedData<2>> Isochrone::Expand(const ExpansionType& exp
 void Isochrone::UpdateIsoTileAlongSegment(const midgard::PointLL& from,
                                           const midgard::PointLL& to,
                                           float seconds,
-                                          float meters) {
+                                          float meters,
+                                          uint8_t band) {
   float minutes = seconds * kMinPerSec;
   float km = meters * kKmPerMeter;
+  // In split mode write the time into this source's own band; otherwise write the time and
+  // distance metrics into their respective bands.
+  auto mark = [&](int tile_id) {
+    if (split_) {
+      isotile_->SetIfLessThan(tile_id, static_cast<size_t>(band), minutes);
+    } else {
+      isotile_->SetIfLessThan(tile_id, {minutes, km});
+    }
+  };
   // Mark tiles that intersect the segment. Optimize this to avoid calling the Intersect
   // method unless more than 2 tiles are crossed by the segment.
   auto tile1 = isotile_->TileId(from);
   auto tile2 = isotile_->TileId(to);
   if (tile1 == tile2) {
-    isotile_->SetIfLessThan(tile1, {minutes, km});
+    mark(tile1);
   } else if (isotile_->AreNeighbors(tile1, tile2)) {
     // If tile 2 is directly east, west, north, or south of tile 1 then the
     // segment will not intersect any other tiles other than tile1 and tile2.
-    isotile_->SetIfLessThan(tile1, {minutes, km});
-    isotile_->SetIfLessThan(tile2, {minutes, km});
+    mark(tile1);
+    mark(tile2);
   } else {
     // Find intersecting tiles (using a Bresenham method)
     auto tiles = isotile_->Intersect(std::list<PointLL>{from, to});
     for (const auto& t : tiles) {
-      isotile_->SetIfLessThan(t.first, {minutes, km});
+      mark(t.first);
     }
   }
 }
@@ -213,10 +235,12 @@ void Isochrone::UpdateIsoTile(const EdgeLabel& pred,
                               const PointLL& ll,
                               float secs0,
                               float dist0) {
-  // Skip if the opposing edge has already been settled.
+  // Skip if the opposing edge has already been settled. In split mode each source is its own path,
+  // so the opposing edge's status must be looked up for this label's path_id.
+  const uint8_t band = pred.path_id();
   graph_tile_ptr t2;
   GraphId opp = graphreader.GetOpposingEdgeId(pred.edgeid(), t2);
-  EdgeStatusInfo es = edgestatus_.Get(opp);
+  EdgeStatusInfo es = edgestatus_.Get(opp, band);
   // process origin edge even if its opposite edge is permanent
   if (es.set() == EdgeSet::kPermanent && !pred.origin()) {
     return;
@@ -250,7 +274,7 @@ void Isochrone::UpdateIsoTile(const EdgeLabel& pred,
       auto origin_edge_shape = OriginEdgeShape(ordered_shape, pred.path_distance());
       ll0 = origin_edge_shape.front();
     }
-    UpdateIsoTileAlongSegment(ll0, ll, secs1, dist1);
+    UpdateIsoTileAlongSegment(ll0, ll, secs1, dist1, band);
     return;
   }
 
@@ -280,7 +304,7 @@ void Isochrone::UpdateIsoTile(const EdgeLabel& pred,
   for (auto itr2 = itr1 + 1; itr2 < resampled.end(); itr1++, itr2++) {
     seconds += delta_seconds;
     meters += delta_meters;
-    UpdateIsoTileAlongSegment(*itr1, *itr2, seconds, meters);
+    UpdateIsoTileAlongSegment(*itr1, *itr2, seconds, meters, band);
   }
 }
 

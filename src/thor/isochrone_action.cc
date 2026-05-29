@@ -15,6 +15,16 @@ std::string thor_worker_t::isochrones(Api& request) {
   adjust_locations(request);
   auto costing = parse_costing(request);
 
+  // split mode colors a single aligned grid by which of two sources is closer in cost; it always
+  // emits a 2-band (seconds-from-location-0, seconds-from-location-1) geotiff
+  if (options.isochrone_split()) {
+    if (options.locations_size() < 2)
+      throw valhalla_exception_t{120};
+    if (options.locations_size() > 2)
+      throw valhalla_exception_t{150};
+    options.set_format(Options::geotiff);
+  }
+
   // name of the metric (time/distance, value, color)
   std::vector<GriddedData<2>::contour_interval_t> intervals;
   for (const auto& contour : options.contours()) {

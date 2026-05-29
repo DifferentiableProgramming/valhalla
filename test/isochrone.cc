@@ -555,6 +555,62 @@ TEST(Isochrones, test_geotiff_output_time_distance) {
   VSIFCloseL(handle);
 }
 
+// split mode: a single aligned grid with one seconds-band per input location
+TEST(Isochrones, test_geotiff_split_two_sources) {
+  loki_worker_t loki_worker(cfg);
+  thor_worker_t thor_worker(cfg);
+
+  // two origins a few km apart; no format given so split mode forces geotiff
+  const auto request =
+      R"({"costing":"auto","locations":[{"lon":5.086633,"lat":52.075911},{"lon":5.128852,"lat":52.109455}],"contours":[{"time":10}],"isochrone_split":true})";
+  Api request_pbf;
+  ParseApi(request, Options::isochrone, request_pbf);
+  loki_worker.isochrones(request_pbf);
+  std::string geotiff = thor_worker.isochrones(request_pbf);
+
+  std::string name = "/vsimem/test_isogrid_split.tif";
+  std::vector<unsigned char> buffer(geotiff.length());
+  std::copy(geotiff.cbegin(), geotiff.cend(), buffer.begin());
+  auto handle =
+      VSIFileFromMemBuffer(name.c_str(), buffer.data(), static_cast<int>(geotiff.size()), 0);
+  auto ds = GDALDataset::FromHandle(GDALOpen(name.c_str(), GA_ReadOnly));
+  ASSERT_NE(ds, nullptr);
+
+  // one band per source
+  EXPECT_EQ(ds->GetRasterCount(), 2);
+  int x = ds->GetRasterXSize();
+  int y = ds->GetRasterYSize();
+
+  std::vector<uint16_t> secs_from_0(x * y), secs_from_1(x * y);
+  ASSERT_EQ(ds->GetRasterBand(1)->RasterIO(GF_Read, 0, 0, x, y, secs_from_0.data(), x, y, GDT_UInt16,
+                                           0, 0),
+            CE_None);
+  ASSERT_EQ(ds->GetRasterBand(2)->RasterIO(GF_Read, 0, 0, x, y, secs_from_1.data(), x, y, GDT_UInt16,
+                                           0, 0),
+            CE_None);
+
+  const uint16_t nodata = std::numeric_limits<uint16_t>::max();
+
+  // each source reaches its own seed at ~0 seconds
+  EXPECT_EQ(*std::min_element(secs_from_0.begin(), secs_from_0.end()), 0);
+  EXPECT_EQ(*std::min_element(secs_from_1.begin(), secs_from_1.end()), 0);
+
+  // the partition is non-degenerate: some cells are closer (in cost) to source 0, others to source 1
+  size_t closer_to_0 = 0, closer_to_1 = 0;
+  for (size_t i = 0; i < secs_from_0.size(); ++i) {
+    if (secs_from_0[i] == nodata || secs_from_1[i] == nodata)
+      continue;
+    if (secs_from_0[i] < secs_from_1[i])
+      ++closer_to_0;
+    else if (secs_from_1[i] < secs_from_0[i])
+      ++closer_to_1;
+  }
+  EXPECT_GT(closer_to_0, 0u);
+  EXPECT_GT(closer_to_1, 0u);
+
+  VSIFCloseL(handle);
+}
+
 TEST(Isochrones, test_geotiff_vertical_orientation) {
   loki_worker_t loki_worker(cfg);
   thor_worker_t thor_worker(cfg);

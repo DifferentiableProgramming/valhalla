@@ -244,11 +244,22 @@ void register_gdal_custom_tags(TIFF* tif) {
 // Serialize GeoTIFF via lib(geo)tiff
 std::string serializeGeoTIFF(Api& request, const std::shared_ptr<const GriddedData<2>>& isogrid) {
 
-  // time, distance
+  const bool split = request.options().isochrone_split();
+  // which bands to write and the factor converting the stored (minutes / km) value to written units
   std::vector<bool> metrics{false, false};
-  for (auto& contour : request.options().contours()) {
-    metrics[0] = metrics[0] || contour.has_time_case();
-    metrics[1] = metrics[1] || contour.has_distance_case();
+  std::array<float, 2> scale_factors{60.f, 100.f};
+  if (split) {
+    // one band per input location, each holding seconds from that source
+    for (int i = 0; i < request.options().locations_size() && i < 2; ++i) {
+      metrics[i] = true;
+    }
+    scale_factors = {60.f, 60.f};
+  } else {
+    // time, distance
+    for (auto& contour : request.options().contours()) {
+      metrics[0] = metrics[0] || contour.has_time_case();
+      metrics[1] = metrics[1] || contour.has_distance_case();
+    }
   }
   const uint8_t valid_bands = static_cast<uint16_t>(std::count(metrics.begin(), metrics.end(), true));
 
@@ -258,7 +269,6 @@ std::string serializeGeoTIFF(Api& request, const std::shared_ptr<const GriddedDa
 
   // collect data from isogrid
   std::vector<std::vector<uint16_t>> planes(metrics.size());
-  constexpr std::array<float, 2> scale_factors{60.f, 100.f};
   for (const auto metric_idx : std::views::iota(0U, metrics.size())) {
     if (!metrics[metric_idx]) {
       continue;
@@ -307,18 +317,28 @@ std::string serializeGeoTIFF(Api& request, const std::shared_ptr<const GriddedDa
   register_gdal_custom_tags(tif);
   std::ostringstream gdal_xml;
   gdal_xml << "<GDALMetadata>\n";
-  if (metrics[0])
-    gdal_xml << "  <Item name=\"time_seconds\" sample=\"0\">Time (seconds)</Item>\n";
-  if (metrics[1])
-    gdal_xml << "  <Item name=\"distance_decameters\" sample=\""
-             << (metrics[0] ? 1 : 0) // distance band index in the written order
-             << "\">Distance (10m)</Item>\n";
+  if (split) {
+    if (metrics[0])
+      gdal_xml << "  <Item name=\"source_0_seconds\" sample=\"0\">Seconds from location 0</Item>\n";
+    if (metrics[1])
+      gdal_xml << "  <Item name=\"source_1_seconds\" sample=\"1\">Seconds from location 1</Item>\n";
+  } else {
+    if (metrics[0])
+      gdal_xml << "  <Item name=\"time_seconds\" sample=\"0\">Time (seconds)</Item>\n";
+    if (metrics[1])
+      gdal_xml << "  <Item name=\"distance_decameters\" sample=\""
+               << (metrics[0] ? 1 : 0) // distance band index in the written order
+               << "\">Distance (10m)</Item>\n";
+  }
   gdal_xml << "</GDALMetadata>";
   TIFFSetField(tif, TIFFTAG_GDAL_METADATA, gdal_xml.str().c_str());
   TIFFSetField(tif, TIFFTAG_GDAL_NODATA, std::to_string(NODATA_VALUE).c_str());
 
   std::string desc;
-  if (valid_bands == 2) {
+  if (split) {
+    desc = valid_bands == 2 ? "Band 1: Seconds from location 0\nBand 2: Seconds from location 1"
+                            : "Band 1: Seconds from location 0";
+  } else if (valid_bands == 2) {
     desc = "Band 1: Time (seconds)\nBand 2: Distance (10m)";
   } else {
     desc = metrics[0] ? "Band 1: Time (seconds)" : "Band 1: Distance (10m)";
